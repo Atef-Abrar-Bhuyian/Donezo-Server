@@ -45,9 +45,22 @@ wss.on("connection", (ws) => {
       if (clients.has(data.userId)) {
         clients.get(data.userId).send(
           JSON.stringify({
-            type: "TASKS_UPDATED",
+            type: "TASK_ADDED",
             task: data.task,
-            message: "Task added successfully!",
+          })
+        );
+      }
+    }
+
+    if (data.type === "TASK_DELETE") {
+      const taskId = data._id;
+      const taskDeleted = await deleteTaskFromDB(taskId);
+
+      if (clients.has(data.userId)) {
+        clients.get(data.userId).send(
+          JSON.stringify({
+            type: "TASK_DELETED", 
+            taskId,
           })
         );
       }
@@ -63,6 +76,21 @@ wss.on("connection", (ws) => {
     });
   });
 });
+
+// delete a task
+const deleteTaskFromDB = async (taskId) => {
+  try {
+    const db = client.db("donezoDB");
+    const tasksCollection = db.collection("tasks");
+    const result = await tasksCollection.deleteOne({
+      _id: new ObjectId(taskId),
+    });
+    return result.deletedCount > 0;
+  } catch (error) {
+    console.error("Error deleting task:", error);
+    return false;
+  }
+};
 
 // Update or insert task in MongoDB
 async function updateTaskInDB(updatedTask) {
@@ -114,9 +142,9 @@ async function run() {
       const result = await tasksCollection.insertOne(task);
 
       if (clients.has(task.userEmail)) {
-        clients
-          .get(task.userEmail)
-          .send(JSON.stringify({ type: "TASKS_UPDATED", task }));
+        clients.get(task.userEmail).send(
+          JSON.stringify({ type: "TASK_ADDED", task })
+        );
       }
 
       res.send(result);
