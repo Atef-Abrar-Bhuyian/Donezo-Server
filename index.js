@@ -77,7 +77,7 @@ wss.on("connection", (ws) => {
   });
 });
 
-// delete a task
+// delete a task in MongoDB
 const deleteTaskFromDB = async (taskId) => {
   try {
     const db = client.db("donezoDB");
@@ -109,8 +109,8 @@ async function updateTaskInDB(updatedTask) {
 // Express routes
 async function run() {
   try {
-    await client.connect();
-    console.log("Connected to MongoDB!");
+    // await client.connect();
+    // console.log("Connected to MongoDB!");
 
     const userCollection = client.db("donezoDB").collection("users");
     const tasksCollection = client.db("donezoDB").collection("tasks");
@@ -151,10 +151,10 @@ async function run() {
     });
 
     // Send a ping to confirm a successful connection
-    await client.db("admin").command({ ping: 1 });
-    console.log(
-      "Pinged your deployment. You successfully connected to MongoDB!"
-    );
+    // await client.db("admin").command({ ping: 1 });
+    // console.log(
+    //   "Pinged your deployment. You successfully connected to MongoDB!"
+    // );
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
