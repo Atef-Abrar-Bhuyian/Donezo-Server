@@ -8,15 +8,12 @@ const { MongoClient, ServerApiVersion, ObjectId } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Create HTTP server and attach WebSocket to it
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// MongoDB connection
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.68dnu.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
 const client = new MongoClient(uri, {
   serverApi: {
@@ -26,7 +23,6 @@ const client = new MongoClient(uri, {
   },
 });
 
-// Store user-specific WebSocket connections
 const clients = new Map();
 
 wss.on("connection", (ws) => {
@@ -37,16 +33,36 @@ wss.on("connection", (ws) => {
 
     if (data.type === "REGISTER") {
       clients.set(data.userId, ws);
+      console.log(`User ${data.userId} registered.`);
+    }
+
+    if (data.type === "TASK_ADD") {
+      const task = data.task;
+      const updatedTask = await addTaskToDB(task);
+
+      if (clients.has(task.userEmail)) {
+        clients.get(task.userEmail).send(
+          JSON.stringify({
+            type: "TASK_ADDED",
+            task: updatedTask,
+          })
+        );
+      }
     }
 
     if (data.type === "TASK_UPDATE") {
-      await updateTaskInDB(data.task);
+      const taskWithId = { _id: data._id, ...data.task };
+      const updatedTask = await updateTaskInDB(taskWithId);
+      if (!updatedTask) {
+        ws.send(JSON.stringify({ type: "ERROR", message: "Failed to update task" }));
+        return;
+      }
 
       if (clients.has(data.userId)) {
         clients.get(data.userId).send(
           JSON.stringify({
-            type: "TASK_ADDED",
-            task: data.task,
+            type: "TASK_UPDATED",
+            task: updatedTask,
           })
         );
       }
@@ -59,7 +75,7 @@ wss.on("connection", (ws) => {
       if (clients.has(data.userId)) {
         clients.get(data.userId).send(
           JSON.stringify({
-            type: "TASK_DELETED", 
+            type: "TASK_DELETED",
             taskId,
           })
         );
@@ -72,12 +88,12 @@ wss.on("connection", (ws) => {
     clients.forEach((value, key) => {
       if (value === ws) {
         clients.delete(key);
+        console.log(`User ${key} disconnected.`);
       }
     });
   });
 });
 
-// delete a task in MongoDB
 const deleteTaskFromDB = async (taskId) => {
   try {
     const db = client.db("donezoDB");
@@ -92,33 +108,56 @@ const deleteTaskFromDB = async (taskId) => {
   }
 };
 
-// Update or insert task in MongoDB
-async function updateTaskInDB(updatedTask) {
-  const db = client.db("donezoDB");
-  const tasksCollection = db.collection("tasks");
-
-  await tasksCollection.updateOne(
-    { _id: new ObjectId(updatedTask._id) },
-    { $set: updatedTask },
-    { upsert: true }
-  );
-
-  console.log("Task updated or inserted in MongoDB");
+async function addTaskToDB(task) {
+  try {
+    const db = client.db("donezoDB");
+    const tasksCollection = db.collection("tasks");
+    const result = await tasksCollection.insertOne(task);
+    return { _id: result.insertedId, ...task };
+  } catch (error) {
+    console.error("Error adding task:", error);
+    return null;
+  }
 }
 
-// Express routes
+async function updateTaskInDB(updatedTask) {
+  try {
+    const db = client.db("donezoDB");
+    const tasksCollection = db.collection("tasks");
+
+    const taskId = updatedTask._id;
+    if (!taskId) throw new Error("Task _id is missing");
+
+    const taskData = { ...updatedTask };
+    delete taskData._id;
+
+    const result = await tasksCollection.updateOne(
+      { _id: new ObjectId(taskId) },
+      { $set: taskData } // Now includes `order` and `category` as needed
+    );
+
+    if (result.matchedCount === 0) {
+      console.log(`Task with _id ${taskId} not found`);
+      return null;
+    }
+
+    return tasksCollection.findOne({ _id: new ObjectId(taskId) });
+  } catch (error) {
+    console.error("Error updating task:", error.message);
+    return null;
+  }
+}
+
 async function run() {
   try {
-    // await client.connect();
-    // console.log("Connected to MongoDB!");
+    await client.connect();
+    console.log("Connected to MongoDB!");
 
     const userCollection = client.db("donezoDB").collection("users");
     const tasksCollection = client.db("donezoDB").collection("tasks");
 
-    // users collection
     app.post("/users", async (req, res) => {
       const user = req.body;
-
       const query = { email: user.email };
       const existingUser = await userCollection.findOne(query);
 
@@ -127,13 +166,15 @@ async function run() {
       }
 
       const result = await userCollection.insertOne(user);
-
       res.send(result);
     });
 
     app.get("/tasks", async (req, res) => {
       const userEmail = req.query.userEmail;
-      const result = await tasksCollection.find({ userEmail }).toArray();
+      const result = await tasksCollection
+        .find({ userEmail })
+        .sort({ order: 1 }) // Sort by order for consistent retrieval
+        .toArray();
       res.send(result);
     });
 
@@ -143,21 +184,14 @@ async function run() {
 
       if (clients.has(task.userEmail)) {
         clients.get(task.userEmail).send(
-          JSON.stringify({ type: "TASK_ADDED", task })
+          JSON.stringify({ type: "TASK_ADDED", task: { _id: result.insertedId, ...task } })
         );
       }
 
       res.send(result);
     });
-
-    // Send a ping to confirm a successful connection
-    // await client.db("admin").command({ ping: 1 });
-    // console.log(
-    //   "Pinged your deployment. You successfully connected to MongoDB!"
-    // );
-  } finally {
-    // Ensures that the client will close when you finish/error
-    // await client.close();
+  } catch (error) {
+    console.error("Error in MongoDB connection:", error);
   }
 }
 
